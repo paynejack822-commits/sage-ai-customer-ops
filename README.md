@@ -1,4 +1,5 @@
 # SAGE — AI Customer Operations Agent
+![SAGE workflow in n8n](workflow.png)
 
 SAGE is an AI-powered customer support workflow built in **n8n** for *Meridian Commerce*, a fictional electronics e-commerce company. It reads an incoming customer message, uses an LLM to work out what the customer wants, checks every claim against the real order database, applies deterministic business rules, and routes high-value refunds to a human in Slack before any money moves.
 
@@ -136,8 +137,9 @@ A separate evaluation workflow runs a labelled set of messages through the real 
 
 ## Repository contents
 
-- `sage-workflow.json`: the main n8n workflow (exported; credentials not included)
-- `sage-eval-workflow.json`: the evaluation workflow
-- `README.md`: this file
+   - `SAGE — Customer Request Intelligence.json`: the main n8n workflow (exported; credentials not included)
+   - `SAGE Eval.json`: the evaluation workflow
+   - `workflow.png`: screenshot of the main workflow canvas
+   - `README.md`: this file
 
 To run it yourself: import the workflows into n8n, create the Postgres tables above (with the `pgvector` extension), and add your own OpenAI, Cohere, Postgres, and Slack credentials.
