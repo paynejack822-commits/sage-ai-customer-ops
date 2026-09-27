@@ -1,0 +1,1356 @@
+{
+  "name": "SAGE — Customer Request Intelligence",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "c48d04c6-0951-41b4-bbf2-f4e3c40b5d8e",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "b7d4db51-e001-4a1e-9435-2c23109ae85d",
+      "name": "Webhook",
+      "webhookId": "c48d04c6-0951-41b4-bbf2-f4e3c40b5d8e"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalise so tiny differences (extra spaces, capital letters) don't make a retry look like a new request\nconst email = String($json.body.customer_email ?? \"\").trim().toLowerCase();\nconst message = String($json.body.message ?? \"\")\n  .trim()                  // remove spaces at the start and end\n  .replace(/\\s+/g, \" \")    // collapse any run of spaces/tabs/newlines into one space\n  .toLowerCase();\n\nconst requestHash = email + \"|\" + message;\n\nreturn {\n  json: {\n    ...$json,\n    request_hash: requestHash\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        160
+      ],
+      "id": "6182f097-e833-4f7e-aadb-3dc8684680bd",
+      "name": "Build Request Hash"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) as already_processed FROM processed_requests WHERE request_hash = $1;",
+        "options": {
+          "queryReplacement": "=  {{ [ $json.request_hash ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        704,
+        160
+      ],
+      "id": "5f5c66d0-1328-4088-9372-07166acc9d2b",
+      "name": "Check Duplicate Request",
+      "credentials": {
+        "postgres": {
+          "id": "vGwUrxpSujRhJsWV",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO processed_requests (request_hash) VALUES ($1);",
+        "options": {
+          "queryReplacement": "={{ [ $('Build Request Hash').item.json.request_hash ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        96,
+        144
+      ],
+      "id": "b360bbd3-6862-4958-bbf7-fed85c43aacf",
+      "name": "Record as Processed",
+      "credentials": {
+        "postgres": {
+          "id": "vGwUrxpSujRhJsWV",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return {\n  json: {\n    duplicate_blocked: true,\n    message: \"This request was already processed, skipping to avoid duplicate action.\"\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        336
+      ],
+      "id": "4432f265-814f-4ae1-a0d1-f15d12c732a1",
+      "name": "Duplicate Blocked (End)"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5",
+          "mode": "list",
+          "cachedResultName": "GPT-5"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are SAGE, an AI customer operations agent for Meridian Commerce, an e-commerce company that sells electronics.\n\nYour job is to analyze customer support requests and extract structured information from them.\n\nRules:\n1. Identify the customer's primary intent.\n2. Identify all relevant issue types mentioned in the request.\n3. Extract information only when it is explicitly stated or strongly supported by the customer's message.\n4. Never invent an order ID, customer ID, product, amount, action, or urgency.\n5. If information is unavailable, return null.\n6. customer_stated_amount is the amount stated by the customer. It is NOT an authoritative transaction amount.\n7. requested_action must represent an action explicitly requested or clearly stated by the customer.\n8. urgency should represent urgency explicitly expressed by the customer. Do not infer high urgency merely because an issue sounds serious.\n9. A customer can have multiple issue types.\n10. Return the requested structured fields consistently.\n\nAllowed intents:\nrefund_request\ncancellation_request\ndelivery_issue\nreturn_request\nreplacement_request\ntechnical_support\ngeneral_question\nother\nunrelated\n\nAllowed issue types:\ndamaged_product\nmissing_item\nproduct_malfunction\nconnectivity_issue\nsoftware_issue\nwarranty_issue\nsupport_followup\nservice_request\n\nReturn these fields:\nintent\nissue_types\nissue_description\norder_id\ncustomer_id\nproduct_type\nproduct\ncustomer_stated_amount\nrequested_action\nurgency\n\nCRITICAL OUTPUT FORMAT REQUIREMENT:\nRespond with ONLY a valid JSON object. Do not include any explanation, markdown formatting, code fences, or plain text outside the JSON. Do not use \"key: value\" plain text format. The response must start with { and end with }, and be parseable by JSON.parse() with no modification.\n\nINTENT CLASSIFICATION RULES:\n- If the message mentions any product issue, damage, malfunction, delivery problem, or a request for a refund, replacement, return, or cancellation, classify it with the matching specific intent. It is NEVER \"general_question\", \"other\", or \"unrelated\".\n- general_question: a question about Meridian Commerce itself, such as shipping locations, delivery times, payment methods, store policies, gift wrapping, store hours, or how to contact support.\n- other: a message about Meridian Commerce that is not a question and not a request, such as feedback, a compliment, or a general comment about the service.\n- unrelated: a message that has nothing to do with Meridian Commerce, its products, orders, or services, such as general knowledge questions, recommendations for movies or restaurants, or the weather.\n- When in doubt between a specific intent and one of these three, prefer the specific intent.\n- When intent is \"general_question\", \"other\", or \"unrelated\", set issue_types to an empty array [].\n- Do NOT return null for any field unless it is a genuinely optional field like order_id. Always return the correct type (string, array, or explicit null only where appropriate)."
+            },
+            {
+              "content": "=Subject: {{ $('Webhook').item.json.body.subject }}\n\nCustomer message: {{ $('Webhook').item.json.body.message }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        448,
+        0
+      ],
+      "id": "8936fc6a-b512-4788-8811-e178ceee4fb1",
+      "name": "SAGE - Extract Intent",
+      "credentials": {
+        "openAiApi": {
+          "id": null,
+          "name": "",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const output = $json.output;\n\n// Get the model's actual text from the response\n   const text = output?.[0]?.content?.[0]?.text;\n// No text at all means the OpenAI response itself is broken (an API problem, not bad model output),\n// so this still fails loudly on purpose\nif (!text) {\n  throw new Error(\"Could not find SAGE's generated text in the OpenAI response.\");\n}\n\n// LLMs sometimes wrap JSON in ```json fences or add a sentence before/after it.\n// Keep only the part from the first \"{\" to the last \"}\".\nconst start = text.indexOf(\"{\");\nconst end = text.lastIndexOf(\"}\");\nconst jsonText = (start !== -1 && end > start) ? text.slice(start, end + 1) : text;\n\nlet data;\ntry {\n  data = JSON.parse(jsonText);\n} catch (err) {\n  data = null;\n}\n\n// Valid JSON that isn't a plain object (e.g. a string or a list) is just as unusable\nif (data === null || typeof data !== \"object\" || Array.isArray(data)) {\n  return {\n    json: {\n      intent: null,          // Schema Validation rejects this → Validation Failed (End)\n      issue_types: [],\n      issue_description: null,\n      customer_stated_amount: null,\n      parse_error: \"SAGE's output was not valid JSON\",\n      raw_output: text\n    }\n  };\n}\n\nreturn {\n  json: data\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        816,
+        0
+      ],
+      "id": "e9a37e78-8778-46fb-8d66-3e83e80bce02",
+      "name": "Parse SAGE JSON"
+    },
+    {
+      "parameters": {
+        "jsCode": "function parseAmount(value) {\n  if (value === null || value === undefined) return null;\n\n  // Already a number: keep it only if it's a real, finite number\n  if (typeof value === \"number\") return Number.isFinite(value) ? value : null;\n\n  if (typeof value !== \"string\") return null;\n\n  const text = value.toLowerCase();\n\n  // Find the first number (commas allowed, optional decimals), plus an optional unit right after it\n  const match = text.match(/(\\d[\\d,]*(?:\\.\\d+)?)\\s*(crores?|cr|lakhs?|lacs?|l|k|thousand)?\\b/);\n  if (!match) return null;\n\n  const base = Number(match[1].replace(/,/g, \"\"));\n  if (!Number.isFinite(base)) return null;\n\n  const MULTIPLIERS = {\n    crore: 1e7, crores: 1e7, cr: 1e7,\n    lakh: 1e5, lakhs: 1e5, lac: 1e5, lacs: 1e5, l: 1e5,\n    k: 1e3, thousand: 1e3\n  };\n\n  const unit = match[2];\n  const amount = unit ? base * MULTIPLIERS[unit] : base;\n\n  // Round to 2 decimals, e.g. 1.15 * 100000 gives 114999.99999... in JS\n  return Math.round(amount * 100) / 100;\n}\n\nconst data = $json;\n\nreturn {\n  json: {\n    ...data,\n    customer_stated_amount: parseAmount(data.customer_stated_amount)\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        976,
+        16
+      ],
+      "id": "0fb224c3-e8d4-405e-816c-d36355856f96",
+      "name": "Clean Amount"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ALLOWED_INTENTS = [\n  \"refund_request\", \"cancellation_request\", \"delivery_issue\",\n  \"return_request\", \"replacement_request\", \"technical_support\",\n  \"general_question\", \"other\", \"unrelated\"\n];\n\nconst ALLOWED_ISSUE_TYPES = [\n  \"damaged_product\", \"missing_item\", \"product_malfunction\",\n  \"connectivity_issue\", \"software_issue\", \"warranty_issue\",\n  \"support_followup\", \"service_request\"\n];\n\nconst data = $json;\nconst errors = [];\n\n// NEW: check the customer's ORIGINAL message, not SAGE's summary of it.\n// The LLM can invent a description for a blank message, so this check doesn't rely on it.\nconst originalMessage = String($('Webhook').item.json.body.message ?? \"\").trim();\nif (originalMessage === \"\") {\n  errors.push(\"customer message is empty\");\n}\n\nif (!ALLOWED_INTENTS.includes(data.intent)) {\n  errors.push(\"intent is not a recognized value: \" + data.intent);\n}\n\nif (!Array.isArray(data.issue_types) || !data.issue_types.every(type => ALLOWED_ISSUE_TYPES.includes(type))) {\n  errors.push(\"issue_types contains an invalid value: \" + JSON.stringify(data.issue_types));\n}\n\n// Money-related requests must say what's wrong\nconst MONEY_INTENTS = [\"refund_request\", \"cancellation_request\", \"return_request\", \"replacement_request\"];\n\nif (MONEY_INTENTS.includes(data.intent)) {\n  const hasDescription = typeof data.issue_description === \"string\" && data.issue_description.trim() !== \"\";\n  const hasIssueTypes = Array.isArray(data.issue_types) && data.issue_types.length > 0;\n\n  if (!hasDescription && !hasIssueTypes) {\n    errors.push(data.intent + \" has no description of the problem\");\n  }\n}\n\n// Number.isFinite rejects NaN, Infinity and strings\nif (data.customer_stated_amount !== null && !Number.isFinite(data.customer_stated_amount)) {\n  errors.push(\"customer_stated_amount is not a valid number: \" + JSON.stringify(data.customer_stated_amount));\n}\n\nreturn {\n  json: {\n    ...data,\n    validation: {\n      passed: errors.length === 0,\n      errors: errors\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        16
+      ],
+      "id": "7c14682b-fc4d-43a7-adee-0fa88693365b",
+      "name": "Schema Validation"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT c.id AS customer_id, c.name, c.email, o.id AS order_id,\n       o.product, o.amount_paid, o.status, o.order_date\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nWHERE LOWER(c.email) = LOWER(TRIM($1))\nORDER BY o.order_date DESC\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ $('Webhook').item.json.body.customer_email }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1616,
+        0
+      ],
+      "id": "94e728fc-0a7a-4e12-b84d-bb9a975a1304",
+      "name": "Lookup Real Order",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "vGwUrxpSujRhJsWV",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const orderData = $json;\nconst intent = $('Schema Validation').item.json.intent;\n\n// Only refund/replacement-type intents involve money and need this check\nconst refundRelatedIntents = ['refund_request', 'replacement_request', 'return_request', 'cancellation_request'];\nconst isRefundRelated = refundRelatedIntents.includes(intent);\n\n// Number() is strict: any junk makes it NaN instead of quietly reading part of it\nconst actualAmount = Number(orderData.amount_paid);\n\n// A usable amount must be a real, positive number\nconst amountIsValid = Number.isFinite(actualAmount) && actualAmount > 0;\n\n// An order can only be refunded once\nconst alreadyRefunded = isRefundRelated && orderData.status === 'refunded';\n\n// Fail closed: an invalid amount always goes to a human\nconst requiresApproval = isRefundRelated && !alreadyRefunded && (!amountIsValid || actualAmount > 10000);\n\n// NEW: Indian number formatting for display only (65000 → \"65,000\")\nconst formattedAmount = amountIsValid ? actualAmount.toLocaleString('en-IN') : String(orderData.amount_paid);\n\nlet decisionReason;\nif (!isRefundRelated) {\n  decisionReason = `Intent \"${intent}\" does not involve a refund — no approval needed.`;\n} else if (alreadyRefunded) {\n  decisionReason = `Order #${orderData.order_id} has already been refunded — no further refund allowed.`;\n} else if (!amountIsValid) {\n  decisionReason = `Order amount \"${orderData.amount_paid}\" is missing or invalid — human review required.`;\n} else if (requiresApproval) {\n  decisionReason = `Refund amount ₹${formattedAmount} exceeds ₹10,000 threshold — human approval required.`;\n} else {\n  decisionReason = `Refund amount ₹${formattedAmount} is within auto-approval limit.`;\n}\n\nreturn {\n  json: {\n    ...orderData,\n    actual_amount: actualAmount,\n    already_refunded: alreadyRefunded,\n    requires_human_approval: requiresApproval,\n    decision_reason: decisionReason\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2304,
+        336
+      ],
+      "id": "1fbea4f6-cbc5-4801-a2cc-04bfc34e7df1",
+      "name": "Business Rules"
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#support-approvals",
+          "mode": "name"
+        },
+        "message": "=🚨 Refund requires approval\n\nCustomer: {{ $json.name }}\nOrder: #{{ $json.order_id }}\nAmount: ₹{{ Number($json.actual_amount).toLocaleString('en-IN') }}\nReason: {{ $json.decision_reason }}\nCustomer said: {{ $('Schema Validation').item.json.issue_description ?? 'No description provided' }}\n\n{{ $json.order_mismatch ? '⚠️ WARNING: Customer referenced order #' + $json.claimed_order_id + ', but this is order #' + $json.order_id + ' — verify before proceeding.' : '' }}",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double"
+          }
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.7,
+      "position": [
+        2752,
+        208
+      ],
+      "id": "af888243-508e-49ba-82a0-ad30a7bd5a08",
+      "name": "Slack - Request Approval",
+      "webhookId": "095d8390-d940-4fd7-945a-c413a4eaa3e9",
+      "credentials": {
+        "slackApi": {
+          "id": "Fw9s63HMjQlNhn4B",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.cohere.com/v1/embed",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"texts\": [\"{{ $('Webhook').item.json.body.message }}\"],\n  \"model\": \"embed-english-v3.0\",\n  \"input_type\": \"search_query\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2960,
+        0
+      ],
+      "id": "e9d0ba54-2fa7-4293-bb90-2de441ff7f40",
+      "name": "Embed Customer Query (Cohere)",
+      "retryOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "qb8PetlNDJIVrSwJ",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\n\nreturn {\n  json: {\n    query_embedding: data.embeddings[0]\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3072,
+        -144
+      ],
+      "id": "496b45f1-3e98-4b0e-9cdc-edf6240a08a2",
+      "name": "Reshape Embedding"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT category, content, 1 - (embedding <=> $1::vector) AS similarity\nFROM policy_chunks\nORDER BY embedding <=> $1::vector\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify($json.query_embedding) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        3296,
+        0
+      ],
+      "id": "d6d3da75-3dd1-4363-8808-717ebd2cfec3",
+      "name": "RAG Similarity Search",
+      "credentials": {
+        "postgres": {
+          "id": "vGwUrxpSujRhJsWV",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = $json;\nconst SIMILARITY_THRESHOLD = 0.5;\n\nconst hasConfidentMatch = result.similarity >= SIMILARITY_THRESHOLD;\n\nreturn {\n  json: {\n    policy_category: hasConfidentMatch ? result.category : null,\n    policy_content: hasConfidentMatch ? result.content : null,\n    policy_similarity: result.similarity,\n    policy_match_confident: hasConfidentMatch\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3520,
+        0
+      ],
+      "id": "f85e48ad-37be-4318-af09-309263e27e60",
+      "name": "RAG Confidence Check"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "0c9209c6-2a61-4d12-88f1-896ccf76724b",
+              "leftValue": "={{ $if($('Slack - Request Approval').isExecuted, $('Slack - Request Approval').item.json.data.approved, true) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3680,
+        176
+      ],
+      "id": "6ce8a6a0-78a8-4760-8ddf-3bf64ef57f50",
+      "name": "Approved?"
+    },
+    {
+      "parameters": {
+        "jsCode": "return {\n  json: {\n    error_occurred: true,\n    error_message: $json.error?.message || \"Embedding API failed after retries\",\n    policy_category: null,\n    policy_content: null,\n    policy_similarity: 0,\n    policy_match_confident: false\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        48
+      ],
+      "id": "626c17f8-dfb9-44c0-92e7-2193095633d9",
+      "name": "Embedding Error Fallback"
+    },
+    {
+      "parameters": {
+        "jsCode": "const params = [\n  $('Lookup Real Order').item.json.customer_id,\n  $('Lookup Real Order').item.json.order_id,\n  $('Schema Validation').item.json.intent,\n  '{' + $('Schema Validation').item.json.issue_types.join(',') + '}',\n  $('Schema Validation').item.json.issue_description,\n  $('Schema Validation').item.json.customer_stated_amount,\n  $('Business Rules').item.json.actual_amount,\n  $('Business Rules').item.json.requires_human_approval,\n  'rejected',\n  $json.policy_category,     // NEW: $10\n  $json.policy_similarity    // NEW: $11\n];\n\nreturn {\n  json: { params }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3808,
+        336
+      ],
+      "id": "0cf3aead-a5a7-4003-a315-3ecfe8a9f80a",
+      "name": "Build CRM Params (Rejected)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Must match the list in Business Rules\nconst refundRelatedIntents = ['refund_request', 'replacement_request', 'return_request', 'cancellation_request'];\n\nconst intent = $('Schema Validation').item.json.intent;\nconst alreadyRefunded = $('Business Rules').item.json.already_refunded;\n\n// What actually happened to this case\nlet status;\nif (!refundRelatedIntents.includes(intent)) {\n  status = 'logged';             // not a refund at all (delivery issue, general question)\n} else if (alreadyRefunded) {\n  status = 'already_refunded';   // refund request, but the order was already refunded\n} else {\n  status = 'approved';           // refund went through (human-approved or under the threshold)\n}\n\nconst params = [\n  $('Lookup Real Order').item.json.customer_id,\n  $('Lookup Real Order').item.json.order_id,\n  intent,\n  '{' + $('Schema Validation').item.json.issue_types.join(',') + '}',\n  $('Schema Validation').item.json.issue_description,\n  $('Schema Validation').item.json.customer_stated_amount,\n  $('Business Rules').item.json.actual_amount,\n  $('Business Rules').item.json.requires_human_approval,\n  $json.policy_category,\n  $json.policy_similarity,\n  status                         // NEW: $11\n];\n\nreturn {\n  json: { params }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4256,
+        288
+      ],
+      "id": "4d555fbf-9c5e-4ac2-b712-47fc33e459a5",
+      "name": "Build CRM Params (Approved)"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO support_cases (\n  customer_id, order_id, intent, issue_types, issue_description,\n  customer_stated_amount, actual_amount, requires_human_approval,\n  policy_category, policy_similarity,\n  status\n) VALUES (\n  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,\n  $11\n)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ $json.params }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        4128,
+        -16
+      ],
+      "id": "9cc690ba-6b07-470b-8f14-628fd161baaf",
+      "name": "Log Case (Approved)",
+      "credentials": {
+        "postgres": {
+          "id": "vGwUrxpSujRhJsWV",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO support_cases (\n  customer_id, order_id, intent, issue_types, issue_description,\n  customer_stated_amount, actual_amount, requires_human_approval,\n  status,\n  policy_category, policy_similarity\n) VALUES (\n  $1, $2, $3, $4, $5, $6, $7, $8,\n  $9,\n  $10, $11\n);",
+        "options": {
+          "queryReplacement": "{{ $json.params }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        3968,
+        96
+      ],
+      "id": "3f26ec9f-649c-4afc-93b9-ad219650b0ce",
+      "name": "Log Case (Rejected)",
+      "credentials": {
+        "postgres": {
+          "id": "vGwUrxpSujRhJsWV",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const caseId = $('Log Case (Approved)').item.json.id;\nconst orderId = $('Lookup Real Order').item.json.order_id;\nconst amount = $('Business Rules').item.json.actual_amount;\n\nconst params = [\n  caseId,\n  orderId,\n  amount,\n  \"refund\"\n];\n\nreturn {\n  json: { params }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4576,
+        -96
+      ],
+      "id": "54dd581e-bad5-4d44-a9f5-0cd14fdcfd9e",
+      "name": "Build Refund Action Params"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH new_refund AS (\n  INSERT INTO refund_actions (case_id, order_id, amount, action_type)\n  VALUES ($1, $2, $3, $4)\n  RETURNING order_id\n)\nUPDATE orders\nSET status = 'refunded'\nWHERE id = (SELECT order_id FROM new_refund);",
+        "options": {
+          "queryReplacement": "={{ $json.params }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        4736,
+        -144
+      ],
+      "id": "359c1efd-4d02-4080-831f-a1b8ea650dce",
+      "name": "Execute Refund Action",
+      "credentials": {
+        "postgres": {
+          "id": "vGwUrxpSujRhJsWV",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "🔁 Idempotency Guard — prevents duplicate processing of the same request"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -96,
+        400
+      ],
+      "id": "86feecbd-0af2-4946-b1b6-620a03936c66",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "Extraction & Validation — LLM extracts structured data, code validates and cleans it before trusting it"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1072,
+        -160
+      ],
+      "id": "fed146a5-f943-4519-96e2-72ff106d6e57",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "Business Rules — database truth overrides LLM claims; deterministic threshold decides approval",
+        "width": 356
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1776,
+        -160
+      ],
+      "id": "f17316a8-20ab-4527-b344-c11d7c6baef8",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": " RAG Pipeline — semantic policy retrieval with a confidence threshold and error fallback"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3264,
+        -160
+      ],
+      "id": "1f6104af-6a29-4e27-9064-96eec41aa6c4",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": " Human-in-the-Loop — pauses for real approval, branches on the outcome"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2896,
+        272
+      ],
+      "id": "385a5116-bbf0-4015-af5e-81e34d4b9973",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "Audit Trail & Action Execution — logs every case and executes the approved action"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        4448,
+        128
+      ],
+      "id": "9beebc8b-34e8-490b-898c-ddc7c295b8b2",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "1d371951-4d03-473b-8add-6ccc6c29d2e1",
+              "leftValue": "={{ $json.requires_human_approval }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2496,
+        368
+      ],
+      "id": "f7adb494-b136-4332-af10-a7dabd9b26af",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "97bce724-f7a2-4e97-a70c-fd158e9ff507",
+              "leftValue": "={{ $json.validation.passed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1424,
+        16
+      ],
+      "id": "6229fd7a-e6dd-4c2b-9585-6fd4c5a1d41e",
+      "name": "Validation Passed?"
+    },
+    {
+      "parameters": {
+        "jsCode": "return {\n  json: {\n    validation_failed: true,\n    errors: $json.validation.errors,\n    message: \"SAGE's extraction failed validation — stopping before further processing.\"\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1536,
+        288
+      ],
+      "id": "71511071-bc95-46e4-b99b-4e2905159997",
+      "name": "Validation Failed (End)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ad464559-6cd5-457f-b274-b963bd925d21",
+              "leftValue": "={{ ['refund_request', 'replacement_request', 'return_request', 'cancellation_request'].includes($('Schema Validation').item.json.intent) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "6eecb5bf-301a-4f00-b851-168dd641c249",
+              "leftValue": "={{ $('Business Rules').item.json.already_refunded }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4352,
+        32
+      ],
+      "id": "e230030c-676c-48bd-98d1-5d5b921d222a",
+      "name": "If1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const orderData = $json;\nconst intent = $('Schema Validation').item.json.intent;\n\nif (intent !== 'delivery_issue') {\n  return { json: { ...orderData, is_delivery_issue: false } };\n}\n\nconst orderDate = new Date(orderData.order_date);\nconst today = new Date();\nconst daysSinceOrder = Math.floor((today - orderDate) / (1000 * 60 * 60 * 24));\n\nconst priority = daysSinceOrder > 5 ? \"high\" : \"normal\";\n\nreturn {\n  json: {\n    ...orderData,\n    is_delivery_issue: true,\n    days_since_order: daysSinceOrder,\n    priority: priority,\n    recommended_action: priority === \"high\"\n      ? \"Escalate to shipping carrier immediately, offer replacement or refund\"\n      : \"Monitor delivery status, follow up if not resolved within 48 hours\"\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2288,
+        0
+      ],
+      "id": "76e0b88d-2729-4825-9fac-198494468229",
+      "name": "Delivery Business Rules"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "5657dafe-e3e8-4585-978e-a209829a7bb9",
+              "leftValue": "={{ $json.is_delivery_issue }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2512,
+        0
+      ],
+      "id": "ff951677-ad5b-4d00-bf59-d4bb82774e59",
+      "name": "Is Delivery Issue?"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#support-approvals",
+          "mode": "name"
+        },
+        "text": "=📦 Delivery Issue Flagged  Customer: {{ $json.name }} Order: #{{ $json.order_id }} (placed {{ $json.days_since_order }} days ago) Priority: {{ $json.priority.toUpperCase() }} Issue: {{ $('Schema Validation').item.json.issue_description }} Recommended action: {{ $json.recommended_action }} {{ $json.order_mismatch ? '⚠️ WARNING: Customer referenced order #' + $json.claimed_order_id + ', but this is order #' + $json.order_id + ' — verify before proceeding.' : '' }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.7,
+      "position": [
+        2704,
+        16
+      ],
+      "id": "87b49ae6-43d5-4361-9a0b-d14e24a3db8f",
+      "name": "Slack - Delivery Alert",
+      "webhookId": "c1f096cc-2a0b-47db-9c07-89807f4989a2",
+      "credentials": {
+        "slackApi": {
+          "id": "Fw9s63HMjQlNhn4B",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const caseId = null; // we'll link this properly if time allows; for now, tracked independently\nconst orderId = $('Lookup Real Order').item.json.order_id;\nconst daysSinceOrder = $('Delivery Business Rules').item.json.days_since_order;\nconst priority = $('Delivery Business Rules').item.json.priority;\nconst recommendedAction = $('Delivery Business Rules').item.json.recommended_action;\n\nconst params = [orderId, daysSinceOrder, priority, recommendedAction];\n\nreturn { json: { params } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2704,
+        -432
+      ],
+      "id": "c54404d1-a971-492c-8241-eea46c8a87fa",
+      "name": "Build Delivery Followup Params"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO delivery_followups (order_id, days_since_order, priority, recommended_action)\nVALUES ($1, $2, $3, $4);",
+        "options": {
+          "queryReplacement": "={{ $json.params }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2928,
+        -416
+      ],
+      "id": "5356ec4a-6bb2-4e8a-b1ae-61e1147b757a",
+      "name": "Log Delivery Followup",
+      "credentials": {
+        "postgres": {
+          "id": "vGwUrxpSujRhJsWV",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const orderData = $json;\nconst rawClaimed = $('Schema Validation').item.json.order_id;\nconst actualOrderId = Number(orderData.order_id);\n\nlet claimedOrderId = null;\nlet orderMismatch = false;\n\n// Only check if the customer actually mentioned an order (?? catches both null and undefined)\nconst claimedText = String(rawClaimed ?? \"\").trim();\n\nif (claimedText !== \"\") {\n  const digits = claimedText.match(/\\d+/);   // \"#2\", \"ORD-2\", \"order 2\" → \"2\"\n\n  if (digits) {\n    claimedOrderId = Number(digits[0]);\n    orderMismatch = claimedOrderId !== actualOrderId;   // now number vs number\n  } else {\n    // They referenced an order we can't read at all (e.g. \"ORD-XXXX\"): flag it for a human\n    claimedOrderId = claimedText;\n    orderMismatch = true;\n  }\n}\n\nreturn {\n  json: {\n    ...orderData,\n    order_mismatch: orderMismatch,\n    claimed_order_id: claimedOrderId\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2064,
+        0
+      ],
+      "id": "e77795de-a577-4052-ba15-f36dd5936f00",
+      "name": "Check Order Mismatch"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "7c5cf19d-fcef-481d-9c39-1a120de29b25",
+              "leftValue": "={{ $json.order_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "number",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1840,
+        0
+      ],
+      "id": "eb703ec4-b8a8-4075-970b-5c0e1864f9ef",
+      "name": "Order Found?"
+    },
+    {
+      "parameters": {
+        "jsCode": "   return $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1952,
+        240
+      ],
+      "id": "8fd4e4fd-45f2-4f17-a4cc-4fd2b9997a32",
+      "name": "Order Not Found (End)"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#support-approvals",
+          "mode": "name"
+        },
+        "text": "=⚠️ Request from an unknown customer\n\nEmail: {{ $('Webhook').item.json.body.customer_email }}\nMessage: {{ $('Webhook').item.json.body.message }}\n\nNo matching customer or order was found. Please review manually.",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.7,
+      "position": [
+        2000,
+        528
+      ],
+      "id": "862af989-9192-4036-ac86-cbfbdd0233b4",
+      "name": "Slack - Unknown Customer Alert.",
+      "webhookId": "c1f096cc-2a0b-47db-9c07-89807f4989a2",
+      "credentials": {
+        "slackApi": {
+          "id": "Fw9s63HMjQlNhn4B",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#support-approvals",
+          "mode": "name"
+        },
+        "text": "=⚠️ Request could not be processed automatically\n\nEmail: {{ $('Webhook').item.json.body.customer_email }}\nMessage: {{ $('Webhook').item.json.body.message }}\n\nProblems: {{ $json.errors.join(', ') }}\nPlease review manually.",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.7,
+      "position": [
+        1584,
+        608
+      ],
+      "id": "4b9e7083-f794-49cf-a8bd-b75fa66dbb91",
+      "name": "Slack - Validation Failed Alert.",
+      "webhookId": "c1f096cc-2a0b-47db-9c07-89807f4989a2",
+      "credentials": {
+        "slackApi": {
+          "id": "Fw9s63HMjQlNhn4B",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "762a7ad0-1cf5-4dbc-be63-61b21d946afc",
+              "leftValue": "={{ Number($json.already_processed) }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -64,
+        272
+      ],
+      "id": "753e8a7e-cfd3-4153-a96f-1ed711dfb1b8",
+      "name": "Is New Request?"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Build Request Hash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Request Hash": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicate Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate Request": {
+      "main": [
+        [
+          {
+            "node": "Is New Request?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record as Processed": {
+      "main": [
+        [
+          {
+            "node": "SAGE - Extract Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SAGE - Extract Intent": {
+      "main": [
+        [
+          {
+            "node": "Parse SAGE JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse SAGE JSON": {
+      "main": [
+        [
+          {
+            "node": "Clean Amount",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean Amount": {
+      "main": [
+        [
+          {
+            "node": "Schema Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schema Validation": {
+      "main": [
+        [
+          {
+            "node": "Validation Passed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Real Order": {
+      "main": [
+        [
+          {
+            "node": "Order Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Business Rules": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack - Request Approval": {
+      "main": [
+        [
+          {
+            "node": "Embed Customer Query (Cohere)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed Customer Query (Cohere)": {
+      "main": [
+        [
+          {
+            "node": "Reshape Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Embedding Error Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reshape Embedding": {
+      "main": [
+        [
+          {
+            "node": "RAG Similarity Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RAG Similarity Search": {
+      "main": [
+        [
+          {
+            "node": "RAG Confidence Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RAG Confidence Check": {
+      "main": [
+        [
+          {
+            "node": "Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved?": {
+      "main": [
+        [
+          {
+            "node": "Build CRM Params (Approved)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build CRM Params (Rejected)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embedding Error Fallback": {
+      "main": [
+        [
+          {
+            "node": "Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build CRM Params (Rejected)": {
+      "main": [
+        [
+          {
+            "node": "Log Case (Rejected)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build CRM Params (Approved)": {
+      "main": [
+        [
+          {
+            "node": "Log Case (Approved)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Case (Approved)": {
+      "main": [
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Refund Action Params": {
+      "main": [
+        [
+          {
+            "node": "Execute Refund Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Slack - Request Approval",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Embed Customer Query (Cohere)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validation Passed?": {
+      "main": [
+        [
+          {
+            "node": "Lookup Real Order",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Validation Failed (End)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "Build Refund Action Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delivery Business Rules": {
+      "main": [
+        [
+          {
+            "node": "Is Delivery Issue?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Delivery Issue?": {
+      "main": [
+        [
+          {
+            "node": "Slack - Delivery Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Business Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack - Delivery Alert": {
+      "main": [
+        [
+          {
+            "node": "Build Delivery Followup Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Delivery Followup Params": {
+      "main": [
+        [
+          {
+            "node": "Log Delivery Followup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Order Mismatch": {
+      "main": [
+        [
+          {
+            "node": "Delivery Business Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order Found?": {
+      "main": [
+        [
+          {
+            "node": "Check Order Mismatch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Order Not Found (End)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order Not Found (End)": {
+      "main": [
+        [
+          {
+            "node": "Slack - Unknown Customer Alert.",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validation Failed (End)": {
+      "main": [
+        [
+          {
+            "node": "Slack - Validation Failed Alert.",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is New Request?": {
+      "main": [
+        [
+          {
+            "node": "Record as Processed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Duplicate Blocked (End)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "1f066a4a-1c7c-4ae2-9f7b-42b4a6cb9d10",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "c86e226ae3310dd36ddaca7d7917ae854be398cd2e7f1bdc91d8fd999885aded"
+  },
+  "nodeGroups": [],
+  "id": "7SwbASZPZ19iJOxW",
+  "tags": []
+}

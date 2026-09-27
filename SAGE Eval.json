@@ -1,0 +1,128 @@
+{
+  "name": "SAGE Eval.",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "a56087c7-c22f-43bb-b8e6-f05282e43b28",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5",
+          "mode": "list",
+          "cachedResultName": "GPT-5"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are SAGE, an AI customer operations agent for Meridian Commerce, an e-commerce company that sells electronics.\n\nYour job is to analyze customer support requests and extract structured information from them.\n\nRules:\n1. Identify the customer's primary intent.\n2. Identify all relevant issue types mentioned in the request.\n3. Extract information only when it is explicitly stated or strongly supported by the customer's message.\n4. Never invent an order ID, customer ID, product, amount, action, or urgency.\n5. If information is unavailable, return null.\n6. customer_stated_amount is the amount stated by the customer. It is NOT an authoritative transaction amount.\n7. requested_action must represent an action explicitly requested or clearly stated by the customer.\n8. urgency should represent urgency explicitly expressed by the customer. Do not infer high urgency merely because an issue sounds serious.\n9. A customer can have multiple issue types.\n10. Return the requested structured fields consistently.\n\nAllowed intents:\nrefund_request\ncancellation_request\ndelivery_issue\nreturn_request\nreplacement_request\ntechnical_support\ngeneral_question\nother\nunrelated\n\nAllowed issue types:\ndamaged_product\nmissing_item\nproduct_malfunction\nconnectivity_issue\nsoftware_issue\nwarranty_issue\nsupport_followup\nservice_request\n\nReturn these fields:\nintent\nissue_types\nissue_description\norder_id\ncustomer_id\nproduct_type\nproduct\ncustomer_stated_amount\nrequested_action\nurgency\n\nCRITICAL OUTPUT FORMAT REQUIREMENT:\nRespond with ONLY a valid JSON object. Do not include any explanation, markdown formatting, code fences, or plain text outside the JSON. Do not use \"key: value\" plain text format. The response must start with { and end with }, and be parseable by JSON.parse() with no modification.\n\nINTENT CLASSIFICATION RULES:\n- If the message mentions any product issue, damage, malfunction, delivery problem, or a request for a refund, replacement, return, or cancellation, classify it with the matching specific intent. It is NEVER \"general_question\", \"other\", or \"unrelated\".\n- general_question: a question about Meridian Commerce itself, such as shipping locations, delivery times, payment methods, store policies, gift wrapping, store hours, or how to contact support.\n- other: a message about Meridian Commerce that is not a question and not a request, such as feedback, a compliment, or a general comment about the service.\n- unrelated: a message that has nothing to do with Meridian Commerce, its products, orders, or services, such as general knowledge questions, recommendations for movies or restaurants, or the weather.\n- When in doubt between a specific intent and one of these three, prefer the specific intent.\n- When intent is \"general_question\", \"other\", or \"unrelated\", set issue_types to an empty array [].\n- Do NOT return null for any field unless it is a genuinely optional field like order_id. Always return the correct type (string, array, or explicit null only where appropriate)."
+            },
+            {
+              "content": "=   {{ $json.message }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        464,
+        32
+      ],
+      "id": "4b08727a-4a5c-4447-a6ce-fe5295cf0a98",
+      "name": "SAGE - Extract Intent",
+      "credentials": {
+        "openAiApi": {
+          "id": null,
+          "name": "",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const testCases = $('Test Cases').all();\nconst sageOutputs = $input.all();\n\nconst results = sageOutputs.map((item, i) => {\n  const text = item.json.output?.[0]?.content?.[0]?.text ?? \"\";\n\n  // Same safe parsing as Parse SAGE JSON: keep the part between the first \"{\" and last \"}\"\n  const start = text.indexOf(\"{\");\n  const end = text.lastIndexOf(\"}\");\n  let actualIntent = null;\n  try {\n    actualIntent = JSON.parse(text.slice(start, end + 1)).intent ?? null;\n  } catch (err) {\n    actualIntent = \"PARSE_ERROR\";\n  }\n\n  const expected = testCases[i].json.expected_intent;\n  return {\n    message: testCases[i].json.message,\n    expected,\n    actual: actualIntent,\n    correct: actualIntent === expected\n  };\n});\n\nconst correctCount = results.filter(r => r.correct).length;\n\nreturn [{\n  json: {\n    accuracy: `${correctCount}/${results.length} (${Math.round(correctCount / results.length * 100)}%)`,\n    misses: results.filter(r => !r.correct),\n    all_results: results\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        816,
+        80
+      ],
+      "id": "9e05e0da-7cee-4eff-bd45-a39cb77360d5",
+      "name": "score"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Each case: a customer message and the intent we EXPECT SAGE to return\nconst testCases = [\n  // refund_request\n  { message: \"My blender arrived with a cracked jar. I want my money back.\", expected_intent: \"refund_request\" },\n  { message: \"Bhai headphones ka ek side kaam nahi karta, refund chahiye.\", expected_intent: \"refund_request\" },\n  { message: \"The product is nothing like the description. Please refund my ₹2,499.\", expected_intent: \"refund_request\" },\n\n  // cancellation_request\n  { message: \"I placed an order an hour ago by mistake, please cancel it.\", expected_intent: \"cancellation_request\" },\n  { message: \"Cancel my order ORD-5521, I don't need it anymore.\", expected_intent: \"cancellation_request\" },\n\n  // delivery_issue\n  { message: \"My order was supposed to arrive last Monday and it still hasn't come.\", expected_intent: \"delivery_issue\" },\n  { message: \"Tracking says delivered but there's no package at my door.\", expected_intent: \"delivery_issue\" },\n  { message: \"Courier wala 3 din se aa hi nahi raha, mera order kahan hai?\", expected_intent: \"delivery_issue\" },\n\n  // return_request\n  { message: \"The shoes don't fit. How do I return them?\", expected_intent: \"return_request\" },\n  { message: \"I'd like to return the jacket I bought, the colour looks different in person.\", expected_intent: \"return_request\" },\n\n  // replacement_request\n  { message: \"The phone case I received is the wrong model. Can you send the correct one instead?\", expected_intent: \"replacement_request\" },\n  { message: \"My kettle arrived dented. I'd like a replacement, not a refund.\", expected_intent: \"replacement_request\" },\n\n  // technical_support\n  { message: \"My smartwatch won't pair with my phone over Bluetooth. How do I fix it?\", expected_intent: \"technical_support\" },\n  { message: \"The app keeps logging me out every time I open it.\", expected_intent: \"technical_support\" },\n\n  // general_question\n  { message: \"Do you ship to Pune?\", expected_intent: \"general_question\" },\n  { message: \"What payment methods do you accept?\", expected_intent: \"general_question\" },\n  { message: \"Do you offer gift wrapping?\", expected_intent: \"general_question\" },\n\n  // unrelated\n  { message: \"Can you recommend a good movie for tonight?\", expected_intent: \"unrelated\" },\n  { message: \"What's the capital of Australia?\", expected_intent: \"unrelated\" },\n\n  // other\n  { message: \"Great service last time, just wanted to say thanks!\", expected_intent: \"other\" },\n\n  // HELD-OUT: written after the prompt change, using none of the prompt's example words\n  { message: \"Is there an EMI option on laptops above ₹50,000?\", expected_intent: \"general_question\" },\n  { message: \"Do you have the new Sony noise-cancelling headphones in stock?\", expected_intent: \"general_question\" },\n  { message: \"Aapka koi physical store hai Mumbai mein?\", expected_intent: \"general_question\" },\n  { message: \"Your website looks really clean after the redesign, nice work.\", expected_intent: \"other\" },\n  { message: \"Who won the cricket match yesterday?\", expected_intent: \"unrelated\" },\n  { message: \"How long does the warranty last on your headphones?\", expected_intent: \"general_question\" }\n];\n\n// n8n expects a list of items, each wrapped in { json: ... }\nreturn testCases.map(testCase => ({ json: testCase }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "e130afe5-6880-4a76-ae4a-77cf6640d682",
+      "name": "Test Cases"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Test Cases",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SAGE - Extract Intent": {
+      "main": [
+        [
+          {
+            "node": "score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test Cases": {
+      "main": [
+        [
+          {
+            "node": "SAGE - Extract Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "f9d6eb1f-79ed-4fc3-9370-385d6773ddb1",
+  "meta": {
+    "instanceId": "c86e226ae3310dd36ddaca7d7917ae854be398cd2e7f1bdc91d8fd999885aded"
+  },
+  "nodeGroups": [],
+  "id": "y0lCVfsK4uB9cbGO",
+  "tags": []
+}
